@@ -8,6 +8,7 @@ import PIL.Image
 import IPython.display as display
 import numpy as np
 from keras.models import model_from_json
+from timeit import default_timer
 
 class DeepDream(tf.Module):
   def __init__(self, model):
@@ -88,15 +89,6 @@ def run_deep_dream_simple(img, deepdream, steps=100, step_size=0.01):
 
   return result
 
-# Download an image and read it into a NumPy array.
-def download(url, max_dim=None):
-  name = url.split('/')[-1]
-  image_path = tf.keras.utils.get_file(name, origin=url)
-  img = PIL.Image.open(image_path)
-  if max_dim:
-    img.thumbnail((max_dim, max_dim))
-  return np.array(img)
-
 def main():
     model_path = './checkpoints/my_checkpoint.h5'
     model_fn = os.path.join(os.path.dirname(os.path.realpath(__file__)), model_path)
@@ -106,28 +98,33 @@ def main():
     model = tf.keras.models.load_model(model_fn)
     deepdream = DeepDream(model)
 
-
-    while(True):
+    start = default_timer()
+    while(not kb.is_pressed('f4')):
         print('running')
         ret, frame = vid.read()
-
-        #opencv to PIL
+        #128, 72
+        #256, 144
+        frame = cv2.resize(frame, dsize=(128, 72))
+        #CV2 to PIL
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame = PIL.Image.fromarray(frame)
         frame = np.array(frame)
 
         frame =  run_deep_dream_simple(img=frame, deepdream=deepdream,
-                                  steps=100, step_size=0.01)
+                                  steps=5, step_size=.01)
         
         #PIL to CV2
-        up = np.array(frame)
-        up = up[:, :, ::-1].copy()
-        cv2.imshow('frame', up) 
-
+        frame = np.array(frame)
+        frame = frame[:, :, ::-1].copy()
+        cv2.imshow('frame', cv2.resize(frame, dsize=(640, 480)) )
+        duration = default_timer() - start
+        print(duration)
+        start = default_timer()
         # Break if key detected
         if cv2.waitKey(1) & 0xFF == 240: #make it equal something it cant
             break
     
+
     vid.release()
     # Destroy all the windows 
     cv2.destroyAllWindows() 
