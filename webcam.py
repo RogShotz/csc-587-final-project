@@ -101,43 +101,34 @@ def main():
     model_path = './checkpoints/my_checkpoint.h5'
     model_fn = os.path.join(os.path.dirname(os.path.realpath(__file__)), model_path)
 
-    #vid = cv2.VideoCapture(0) 
+    vid = cv2.VideoCapture(0) 
     
     model = tf.keras.models.load_model(model_fn)
     deepdream = DeepDream(model)
 
 
-    #while(not kb.is_pressed('f4')): 
-    #while(True):
-    #    print('running')
-    #    ret, frame = vid.read()
-#
-    #    frame =  run_deep_dream_simple(img=frame, deepdream=deepdream,
-    #                              steps=100, step_size=0.01)
-  #
-    #    # Display the resulting frame 
-    #    pil_image = PIL.Image.open('Image.jpg').convert('RGB')
-    #    show(frame)
-    #    #cv2.imshow('frame', show(frame)) 
-#
-    #    # Break if key detected
-    #    if cv2.waitKey(1) & 0xFF == 240: #make it equal something it cant
-    #        break
-    
-    # After the loop release the cap object 
-    url = 'https://storage.googleapis.com/download.tensorflow.org/example_images/YellowLabradorLooking_new.jpg'
-    original_img = download(url, max_dim=500)
-    print(original_img)
-    original_img = run_deep_dream_simple(img=original_img, deepdream=deepdream,
+    while(True):
+        print('running')
+        ret, frame = vid.read()
+
+        #opencv to PIL
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame = PIL.Image.fromarray(frame)
+        frame = np.array(frame)
+
+        frame =  run_deep_dream_simple(img=frame, deepdream=deepdream,
                                   steps=100, step_size=0.01)
-    print(original_img)
-    up = np.array(original_img)
-    up = up[:, :, ::-1].copy()
-    cv2.imshow('frame', up) 
-    #run_deep_dream_simple(img=frame, deepdream=deepdream,
-    #                              steps=100, step_size=0.01)
-    cv2.waitKey(0)
-    #vid.release()
+        
+        #PIL to CV2
+        up = np.array(frame)
+        up = up[:, :, ::-1].copy()
+        cv2.imshow('frame', up) 
+
+        # Break if key detected
+        if cv2.waitKey(1) & 0xFF == 240: #make it equal something it cant
+            break
+    
+    vid.release()
     # Destroy all the windows 
     cv2.destroyAllWindows() 
 
