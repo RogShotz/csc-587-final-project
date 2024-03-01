@@ -25,7 +25,7 @@ last_layer = None
 last_grad = None
 last_channel = None
 
-model_path = './checkpoints/tensorflow_inception_graph.pb'
+model_path = './inception5h/tensorflow_inception_graph.pb'
 model_fn = os.path.join(os.path.dirname(os.path.realpath(__file__)), model_path)
 
 def newlayer(ns):
@@ -211,8 +211,8 @@ def deepdream_process(ns, globalframelock):
             
         #blendeddream = ((ns.globaldreamframe.copy()*(ns.frameblendfactor/255)) + (warpeddream*((1-ns.frameblendfactor)/255)))
         #blendeddream = np.average(ns.globaldreamframe.copy()*(ns.frameblendfactor/255), ns.globaldreamframe.copy()*(ns.frameblendfactor/255))
-        blendeddream = cv2.addWeighted(dreamframe,.9,warpeddream.copy(),.4,0)
-        blendeddream = cv2.addWeighted(blendeddream,.6,ns.globalnewframe.copy(),.1,0)
+        blendeddream = cv2.addWeighted(dreamframe,.6,warpeddream.copy(),.4,0)
+        blendeddream = cv2.addWeighted(blendeddream,.9,ns.globalnewframe.copy(),.1,0)
         
         ns.globaldreamframe = blendeddream
         ns.totalflow = np.zeros_like(ns.totalflow)
