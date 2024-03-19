@@ -103,7 +103,7 @@ def main():
     model = tf.keras.models.load_model(model_fn)
     deepdream = DeepDream(model)
     sct = mss()
-    mon = {'top': 32, 'left': 1, 'width': 360, 'height': 180}
+    mon = {'top': 32, 'left': 1, 'width': 720, 'height': 360}
     start = default_timer()
     while (not kb.is_pressed('f4')):
         print('running')
@@ -115,7 +115,7 @@ def main():
         # 256, 144
         # 320, 240
         # 640, 480
-        frame = cv2.resize(frame, dsize=(256, 144))
+        frame = cv2.resize(frame, dsize=(320, 240))
         # CV2 to PIL
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame = PIL.Image.fromarray(frame)
@@ -135,7 +135,6 @@ def main():
         if cv2.waitKey(1) & 0xFF == 240:  # make it equal something it cant
             break
 
-    vid.release()
     # Destroy all the windows
     cv2.destroyAllWindows()
 

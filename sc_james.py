@@ -18,7 +18,8 @@ import imutils
 import time
 import random
 import cv2
-import multiprocessing 
+import multiprocessing
+from timeit import default_timer
 
 
 last_layer = None
@@ -224,9 +225,11 @@ def deepdream_process(ns, globalframelock):
     
         
 def opticalflow_process(ns, sct, mon, globalframelock):
-
+    start = default_timer()
     while(1):
-    
+        duration = default_timer() - start
+        print(duration)
+        start = default_timer()
         globalframelock.acquire()
     
         # grab the frame from the threaded video stream
