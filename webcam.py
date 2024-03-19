@@ -104,14 +104,16 @@ def main():
         ret, frame = vid.read()
         #128, 72
         #256, 144
-        frame = cv2.resize(frame, dsize=(128, 72))
+        #320, 240
+        #640, 480
+        frame = cv2.resize(frame, dsize=(256, 144))
         #CV2 to PIL
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame = PIL.Image.fromarray(frame)
         frame = np.array(frame)
 
         frame =  run_deep_dream_simple(img=frame, deepdream=deepdream,
-                                  steps=5, step_size=.01)
+                                  steps=20, step_size=.01)
         
         #PIL to CV2
         frame = np.array(frame)

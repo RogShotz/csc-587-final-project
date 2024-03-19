@@ -1,352 +1,144 @@
-from imutils.video import VideoStream
-from imutils import paths
-from skimage.io import imread,imsave
-from io import BytesIO
-from PIL import Image
-from mss import mss
-from multiprocessing import Manager
-import argparse
-import scipy.ndimage as spi
-import numpy as np
-import PIL
-import os
-import sys
-import tensorflow as tf
-import itertools
-import argparse
-import imutils
-import time
-import random
 import cv2
-import multiprocessing 
+import keyboard as kb
+import time
+import tensorflow as tf
+from mss import mss
+from tensorflow import keras
+import os
+import PIL.Image
+import IPython.display as display
+import numpy as np
+from keras.models import model_from_json
+from timeit import default_timer
 
 
-last_layer = None
-last_grad = None
-last_channel = None
+class DeepDream(tf.Module):
+    def __init__(self, model):
+        self.model = model
 
-model_path = './inception5h/tensorflow_inception_graph.pb'
-model_fn = os.path.join(os.path.dirname(os.path.realpath(__file__)), model_path)
+    @tf.function(
+        input_signature=(
+            tf.TensorSpec(shape=[None, None, 3], dtype=tf.float32),
+            tf.TensorSpec(shape=[], dtype=tf.int32),
+            tf.TensorSpec(shape=[], dtype=tf.float32),)
+    )
+    def __call__(self, img, steps, step_size):
+        print("Tracing")
+        loss = tf.constant(0.0)
+        for n in tf.range(steps):
+            with tf.GradientTape() as tape:
+                # This needs gradients relative to `img`
+                # `GradientTape` only watches `tf.Variable`s by default
+                tape.watch(img)
+                loss = calc_loss(img, self.model)
 
-def newlayer(ns):
-    #selects random layer and channel
-    x = random.randint(0,4)
-    if x==0:
-        ns.layer = "mixed4c_pool_reduce"
-        ns.channel = random.randint(0,63)
-    elif x==1:
-        ns.layer = "mixed4c"
-        ns.channel = random.randint(0,100)
-    elif x==2:
-        ns.layer = "mixed4c"
-        ns.channel = random.randint(100,200)
-    elif x==3:
-        ns.layer = "mixed4c"
-        ns.channel = random.randint(400,500)
-    elif x==4:
-        ns.layer = "mixed4b"
-        ns.channel = random.randint(0,100)
-    else:
-        ns.layer = "mixed3b"
-        ns.channel = random.randint(0,100)
+            # Calculate the gradient of the loss with respect to the pixels of the input image.
+            gradients = tape.gradient(loss, img)
 
-def warp_flow(img, flow):
-    h, w = flow.shape[:2]
-    flow = -flow
-    flow[:,:,0] += np.arange(w)
-    flow[:,:,1] += np.arange(h)[:,np.newaxis]
-    res = cv2.remap(img, flow, None, cv2.INTER_LINEAR)
-    return res
-    
-def dream(graph, sess, t_input, imagenet_mean, t_preprocessed,input_img,layer_name,channel_value,iter_value, step_size, octave_value):
-    tile_size = 256
-    
-    octave_value = 1
-    octave_scale_value = 1
-    model_path = 'tensorflow_inception_graph.pb'
-    print_model = False
-    verbose = False
-    #input_img = spi.imread(input_img, mode="RGB")
-    
-    
-    #model_fn = os.path.join(os.path.dirname(os.path.realpath(__file__)), model_path)
-    # creating TensorFlow session and loading the model
-    #graph = tf.Graph()
-    #sess = tf.InteractiveSession(graph=graph)
-    #with tf.gfile.FastGFile(model_fn, 'rb') as f:
-    #    graph_def = tf.GraphDef()
-    #    graph_def.ParseFromString(f.read())
-    #t_input = tf.placeholder(np.float32, name='input') # define the input tensor
-    #imagenet_mean = 117.0
-    #t_preprocessed = tf.expand_dims(t_input-imagenet_mean, 0)
-    #tf.import_graph_def(graph_def, {'input':t_preprocessed})
+            # Normalize the gradients.
+            gradients /= tf.math.reduce_std(gradients) + 1e-8
 
-    # Optionally print the inputs and layers of the specified graph.
-    #if not print_model:
-      #print(graph.get_operations())
+            # In gradient ascent, the "loss" is maximized so that the input image increasingly "excites" the layers.
+            # You can update the image by directly adding the gradients (because they're the same shape!)
+            img = img + gradients*step_size
+            img = tf.clip_by_value(img, -1, 1)
 
-    def T(layer):
-        '''Helper for getting layer output tensor'''
-        return graph.get_tensor_by_name("import/%s:0"%layer)
-
-    def tffunc(*argtypes):
-        '''Helper that transforms TF-graph generating function into a regular one.
-        See "resize" function below.
-        '''
-        placeholders = list(map(tf.compat.v1.placeholder, argtypes))
-        def wrap(f):
-            out = f(*placeholders)
-            def wrapper(*args, **kw):
-                return out.eval(dict(zip(placeholders, args)), session=kw.get('session'))
-            return wrapper
-        return wrap
-
-    # Helper function that uses TF to resize an image
-    def resize(img, size):
-        img = tf.expand_dims(img, 0)
-        return tf.compat.v1.image.resize_bilinear(img, size)[0,:,:,:]
-    resize = tffunc(np.float32, np.int32)(resize)
-
-    def calc_grad_tiled(img, t_grad, tile_size=512):
-        '''Compute the value of tensor t_grad over the image in a tiled way.
-        Random shifts are applied to the image to blur tile boundaries over
-        multiple iterations.'''
-        sz = tile_size
-        h, w = img.shape[:2]
-        sx, sy = np.random.randint(sz, size=2)
-        img_shift = np.roll(np.roll(img, sx, 1), sy, 0)
-        grad = np.zeros_like(img)
-        for y in range(0, max(h-sz//2, sz),sz):
-            for x in range(0, max(w-sz//2, sz),sz):
-                sub = img_shift[y:y+sz,x:x+sz]
-                g = sess.run(t_grad, {t_input:sub})
-                grad[y:y+sz,x:x+sz] = g
-        return np.roll(np.roll(grad, -sx, 1), -sy, 0)
-
-    def render_deepdream(t_grad, img0, iter_n=10, step=1.5, octave_n=4, octave_scale=1.4):
-        # split the image into a number of octaves
-        img = img0
-        octaves = []
-        for i in range(octave_n-1):
-            hw = img.shape[:2]
-            lo = resize(img, np.int32(np.float32(hw)/octave_scale))
-            hi = img-resize(lo, hw)
-            img = lo
-            octaves.append(hi)
-
-        # generate details octave by octave
-        for octave in range(octave_n):
-            if octave>0:
-                hi = octaves[-octave]
-                img = resize(img, hi.shape[:2])+hi
-            for i in range(iter_n):
-                #g = calc_grad_tiled(img, t_grad)
-                g = calc_grad_tiled(img, t_grad, tile_size)
-                img += g*(step / (np.abs(g).mean()+1e-7))
-            #if not verbose:
-                #print ("Iteration Number: %d" % i)
-        #if not verbose:
-                #print ("Octave Number: %d" % octave)
+        return loss, img
 
 
-        return Image.fromarray(np.uint8(np.clip(img/255.0, 0, 1)*255)) 
-    
-    def render(img, layer='mixed4d_3x3_bottleneck_pre_relu', channel=139, iter_n=10, step=1.5, octave_n=4, octave_scale=1.4):
-        global last_layer, last_grad, last_channel
-        if last_layer == layer and last_channel == channel:
-            t_grad = last_grad
+def calc_loss(img, model):
+    # Pass forward the image through the model to retrieve the activations.
+    # Converts the image into a batch of size 1.
+    img_batch = tf.expand_dims(img, axis=0)
+    layer_activations = model(img_batch)
+    if len(layer_activations) == 1:
+        layer_activations = [layer_activations]
+
+    losses = []
+    for act in layer_activations:
+        loss = tf.math.reduce_mean(act)
+        losses.append(loss)
+
+    return tf.reduce_sum(losses)
+
+# Normalize an image
+
+
+def deprocess(img):
+    img = 255*(img + 1.0)/2.0
+    return tf.cast(img, tf.uint8)
+
+
+def run_deep_dream_simple(img, deepdream, steps=100, step_size=0.01):
+    # Convert from uint8 to the range expected by the model.
+    img = tf.keras.applications.inception_v3.preprocess_input(img)
+    img = tf.convert_to_tensor(img)
+    step_size = tf.convert_to_tensor(step_size)
+    steps_remaining = steps
+    step = 0
+    while steps_remaining:
+        if steps_remaining > 100:
+            run_steps = tf.constant(100)
         else:
-            if channel == 4242:
-                t_obj = tf.square(T(layer))
-            else:
-                t_obj = T(layer)[:,:,:,channel]
-            t_score = tf.reduce_mean(t_obj) # defining the optimization objective
-            t_grad = tf.gradients(t_score, t_input)[0] # behold the power of automatic differentiation!
-            last_layer = layer
-            last_grad = t_grad
-            last_channel = channel
-        img0 = np.float32(img)
-        return render_deepdream(t_grad, img0, iter_n, step, octave_n, octave_scale)
-        
-        
-    output_img = render(input_img, layer=layer_name, channel=channel_value, iter_n=iter_value, step=step_size, octave_n=octave_value, octave_scale=octave_scale_value)
-    return output_img
-    
-    
-    
-#--------------------------------
-#-----  PROCESS  FUNCTIONS ------
-#--------------------------------
-    
+            run_steps = tf.constant(steps_remaining)
+        steps_remaining -= run_steps
+        step += run_steps
 
-def deepdream_process(ns, globalframelock):
+        loss, img = deepdream(img, run_steps, tf.constant(step_size))
 
-    # creating TensorFlow session and loading the model
-    graph = tf.Graph()
-    sess = tf.compat.v1.InteractiveSession(graph=graph)
-    with tf.compat.v1.gfile.FastGFile(model_fn, 'rb') as f:
-        graph_def = tf.compat.v1.GraphDef()
-        graph_def.ParseFromString(f.read())
-    t_input = tf.compat.v1.placeholder(np.float32, name='input') # define the input tensor
-    imagenet_mean = 117.0
-    t_preprocessed = tf.expand_dims(t_input-imagenet_mean, 0)
-    tf.import_graph_def(graph_def, {'input':t_preprocessed})
+        display.clear_output(wait=True)
+        print("Step {}, loss {}".format(step, loss))
 
-    globalframelock.acquire()
-    dreamframe = ns.globalnewframe.copy()
-    globalframelock.release()
-    
-    while(1):
-        #dreamframe = ns.globalnewframe.copy()
-        dreamframe = dream(graph, sess, t_input, imagenet_mean, t_preprocessed, dreamframe, ns.layer, ns.channel, ns.iter_value, ns.step_size, ns.octave_value)
-        dreamframe = np.array(dreamframe)
-        globalframelock.acquire()
-            
-        
-        warpeddream = warp_flow(dreamframe.copy(), ns.totalflow)
-        dreamframe = warp_flow(ns.globaldreamframe.copy(), ns.totalflow)
-            
-        #blendeddream = ((ns.globaldreamframe.copy()*(ns.frameblendfactor/255)) + (warpeddream*((1-ns.frameblendfactor)/255)))
-        #blendeddream = np.average(ns.globaldreamframe.copy()*(ns.frameblendfactor/255), ns.globaldreamframe.copy()*(ns.frameblendfactor/255))
-        blendeddream = cv2.addWeighted(dreamframe,.6,warpeddream.copy(),.4,0)
-        blendeddream = cv2.addWeighted(blendeddream,.9,ns.globalnewframe.copy(),.1,0)
-        
-        ns.globaldreamframe = blendeddream
-        ns.totalflow = np.zeros_like(ns.totalflow)
-        
-        #selects random layer and channel
-        x = random.randint(0,40000)
-        if x==0:
-            newlayer(ns)
-            print("new layer: " + ns.layer +str(ns.channel))
-        
-        globalframelock.release()
-    
-        
-def opticalflow_process(ns, sct, mon, globalframelock):
+    result = deprocess(img)
+    display.clear_output(wait=True)
 
-    while(1):
-    
-        globalframelock.acquire()
-    
-        # grab the frame from the threaded video stream
-        img = np.array(sct.grab(mon))
-        newframe = cv2.cvtColor(img,cv2.COLOR_BGRA2BGR)
-        
-        ns.globalnewframe = newframe.copy()
-        ns.next = cv2.cvtColor(ns.globalnewframe,cv2.COLOR_BGR2GRAY)
+    return result
 
-        flow = cv2.calcOpticalFlowFarneback(ns.prev, ns.next, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-        ns.totalflow = ns.totalflow + flow
-        
-        mag, ang = cv2.cartToPolar(ns.totalflow[...,0], ns.totalflow[...,1])
-        hsv[...,0] = ang*180/np.pi/2
-        hsv[...,2] = cv2.normalize(mag,None,0,255,cv2.NORM_MINMAX)
-        rgb = cv2.cvtColor(hsv,cv2.COLOR_HSV2BGR)
-        
-        output = warp_flow(ns.globaldreamframe.copy(), ns.totalflow)
-        
-        #matframe = ns.globalnewframe*mat
-        
-        #find mat 
-        #outputmat = cv2.cvtColor(output.copy(),cv2.COLOR_BGR2GRAY)
-        #mat = cv2.threshold(outputmat,127,255,cv2.THRESH_BINARY_INV)
-        #output2 = mat*ns.globalnewframe.copy()
-        
-        #ns.globaldreamframe = np.array(output)
-        output = cv2.resize(output, dsize=(1280, 720), interpolation=cv2.INTER_CUBIC)
-        
-        # show frames
-        cv2.imshow("Flow", rgb)
-        cv2.imshow("Output", output)
-        
-        ns.prev = ns.next.copy()
-        
-        globalframelock.release()
-        
-        key = cv2.waitKey(1) & 0xFF
 
-        # if the `n` key is pressed change layer
-        if key == ord("n"):
-            newlayer(ns)
-            print("new layer: " + ns.layer +str(ns.channel))
-        if key == ord("i"):
-            ns.iter_value += 1
-            print("iter_value: " + str(ns.iter_value))
-        if key == ord("k"):
-            if(ns.iter_value > 1):
-                ns.iter_value -= 1
-            print("iter_value: " + str(ns.iter_value))
-        if key == ord("u"):
-            if(ns.frameblendfactor < 1):
-                ns.frameblendfactor += .05
-            print("frameblendfactor: " + str(ns.frameblendfactor))
-        if key == ord("j"):
-            if(ns.frameblendfactor > 0):
-                ns.frameblendfactor -= .05
-            print("frameblendfactor: " + str(ns.frameblendfactor))
-        if key == ord("o"):
-            ns.step_size += 1
-            print("step_size: " + str(ns.step_size))
-        if key == ord("l"):
-            if(ns.iter_value > 0):
-                ns.step_size -= 1
-            print("step_size: " + str(ns.step_size))
-        # otheriwse, if the `q` key was pressed, break from the loop
-        elif key == ord("q"):
-            break
-        
-        
-                
-        
-    
-    
-if __name__ == '__main__':
+def main():
+    model_path = './checkpoints/my_checkpoint.h5'
+    model_fn = os.path.join(os.path.dirname(
+        os.path.realpath(__file__)), model_path)
 
-    #globals
-    manager = Manager()
-    ns = manager.Namespace()
-    #mon = {'top': 32, 'left': 1, 'width': 240, 'height': 135}
-    mon = {'top': 32, 'left': 1, 'width': 360, 'height': 180}
-    #mon = {'top': 32, 'left': 1, 'width': 640, 'height': 360}
+    model = tf.keras.models.load_model(model_fn)
+    deepdream = DeepDream(model)
     sct = mss()
-    ns.frameblendfactor = .01
-    ns.iter_value = 1
-    ns.step_size = 2
-    ns.octave_value = 1
-    ns.layer = ""
-    ns.channel = 0
-    
-    
-    newlayer(ns)
+    mon = {'top': 32, 'left': 1, 'width': 360, 'height': 180}
+    start = default_timer()
+    while (not kb.is_pressed('f4')):
+        print('running')
+        sct.grab(mon)
+        img = np.array(sct.grab(mon))
+        frame = cv2.cvtColor(img,cv2.COLOR_BGRA2BGR)
 
-    globalframelock = multiprocessing.Lock()
+        # 128, 72
+        # 256, 144
+        # 320, 240
+        # 640, 480
+        frame = cv2.resize(frame, dsize=(256, 144))
+        # CV2 to PIL
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame = PIL.Image.fromarray(frame)
+        frame = np.array(frame)
 
-    #Start video stream
-    ns.frameblendfactor = .7
-    
-    # grab the frame from the threaded video stream
-    sct.grab(mon)
-    img = np.array(sct.grab(mon))
-    frame = cv2.cvtColor(img,cv2.COLOR_BGRA2BGR)
-    
-    ns.globaldreamframe = frame.copy()
-    ns.globalnewframe = frame.copy()
-    ns.prev = cv2.cvtColor(frame,cv2.COLOR_BGRA2GRAY)
-    ns.next = ns.prev.copy()
+        frame = run_deep_dream_simple(img=frame, deepdream=deepdream,
+                                      steps=10, step_size=.01)
 
-    hsv = np.zeros_like(frame)
-    hsv[...,1] = 255
-    ns.totalflow = 0
-    
-    dd = multiprocessing.Process(target=deepdream_process, args=(ns, globalframelock))
-    
-    #Start multiprocessing
-    print("Start multiprocessing")
-    dd.start()
-    opticalflow_process(ns, sct, mon, globalframelock)
-    
-    
-    #Cleanup
+        # PIL to CV2
+        frame = np.array(frame)
+        frame = frame[:, :, ::-1].copy()
+        cv2.imshow('frame', cv2.resize(frame, dsize=(640, 480)))
+        duration = default_timer() - start
+        print(duration)
+        start = default_timer()
+        # Break if key detected
+        if cv2.waitKey(1) & 0xFF == 240:  # make it equal something it cant
+            break
+
+    vid.release()
+    # Destroy all the windows
     cv2.destroyAllWindows()
-    sct.stop()
+
+
+if __name__ == '__main__':
+    main()
